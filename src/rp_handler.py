@@ -63,14 +63,8 @@ import os
 import copy
 import logging
 
-# Audio preprocessing pipeline imports
-try:
-    from whisper_audio_pipeline import WhisperAudioPipeline
-    AUDIO_PIPELINE_AVAILABLE = True
-    logger.info("Audio preprocessing pipeline loaded successfully")
-except ImportError as e:
-    AUDIO_PIPELINE_AVAILABLE = False
-    logger.warning(f"Audio preprocessing pipeline not available: {e}")
+# Audio preprocessing temporarily disabled for debugging
+AUDIO_PIPELINE_AVAILABLE = False
 import sys
 # Create a custom logger
 logger = logging.getLogger("rp_handler")
@@ -206,50 +200,8 @@ def run(job):
         "debug"                    : job_input.get("debug", False),
     }
 
-    # ------------- Apply audio preprocessing before WhisperX -------------
-    if AUDIO_PIPELINE_AVAILABLE:
-        try:
-            logger.info(f"🔧 Applying audio preprocessing for [{session_id}:{chunk_index}]")
-            
-            # Create pipeline with VAD disabled (let WhisperX handle VAD)
-            enable_separation = os.getenv("ENABLE_SOURCE_SEPARATION", "false").lower() == "true"
-            
-            pipeline = WhisperAudioPipeline(
-                target_sr=16000,  # WhisperX preferred sample rate
-                enable_vad=False,  # VAD disabled - handled by WhisperX
-                enable_source_separation=enable_separation,
-                segment_length=30.0
-            )
-            
-            # Load and enhance audio
-            processed_results = pipeline.process_audio_file(audio_file_path, output_dir=None)
-            
-            if processed_results and len(processed_results) > 0:
-                # Use the first (and typically only) processed segment
-                enhanced_audio = processed_results[0]['audio_data']
-                sample_rate = processed_results[0]['sample_rate']
-                
-                # Save enhanced audio to new temporary file
-                import tempfile
-                import soundfile as sf
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as enhanced_temp:
-                    sf.write(enhanced_temp.name, enhanced_audio, sample_rate)
-                    enhanced_audio_path = enhanced_temp.name
-                
-                # Update the path for WhisperX to use enhanced audio
-                original_audio_path = audio_file_path
-                audio_file_path = enhanced_audio_path
-                predict_input["audio_file"] = enhanced_audio_path
-                
-                logger.info(f"✅ Audio preprocessing completed for [{session_id}:{chunk_index}]")
-            else:
-                logger.warning(f"⚠️ Audio preprocessing returned no results, using original audio")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Audio preprocessing failed for [{session_id}:{chunk_index}]: {e}")
-            logger.info("Continuing with original audio...")
-    else:
-        logger.info(f"📦 Audio preprocessing disabled, using original audio for [{session_id}:{chunk_index}]")
+    # ------------- Audio preprocessing temporarily disabled for debugging -------------
+    logger.info(f"🔧 Audio preprocessing disabled for debugging - using original audio for [{session_id}:{chunk_index}]")
 
     try:
         transcription_start_time = datetime.now()
@@ -341,21 +293,11 @@ def run(job):
 
     # 4-Cleanup and return output_dict normally
     try:
-        # Clean up temporary audio files
+        # Clean up temporary audio file
         import os
         if 'audio_file_path' in locals() and os.path.exists(audio_file_path):
             os.unlink(audio_file_path)
             logger.debug(f"Cleaned up temporary audio file: {audio_file_path}")
-        
-        # Clean up enhanced audio file if it exists
-        if 'enhanced_audio_path' in locals() and os.path.exists(enhanced_audio_path):
-            os.unlink(enhanced_audio_path)
-            logger.debug(f"Cleaned up enhanced audio file: {enhanced_audio_path}")
-        
-        # Clean up original audio file if we used enhanced version
-        if 'original_audio_path' in locals() and os.path.exists(original_audio_path):
-            os.unlink(original_audio_path)
-            logger.debug(f"Cleaned up original audio file: {original_audio_path}")
         
         rp_cleanup.clean(["input_objects"])
         cleanup_job_files(job_id)
