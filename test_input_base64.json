@@ -1,0 +1,8 @@
+{
+  "input": {
+    "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=",
+    "session_id": "whisperx_test_001", 
+    "chunk_index": 0,
+    "filename": "test_audio.wav"
+  }
+}

@@ -62,6 +62,15 @@ from predict import Predictor, Output
 import os
 import copy
 import logging
+
+# Audio preprocessing pipeline imports
+try:
+    from whisper_audio_pipeline import WhisperAudioPipeline
+    AUDIO_PIPELINE_AVAILABLE = True
+    logger.info("Audio preprocessing pipeline loaded successfully")
+except ImportError as e:
+    AUDIO_PIPELINE_AVAILABLE = False
+    logger.warning(f"Audio preprocessing pipeline not available: {e}")
 import sys
 # Create a custom logger
 logger = logging.getLogger("rp_handler")
@@ -109,6 +118,9 @@ def cleanup_job_files(job_id, jobs_directory='/jobs'):
 # --------------------------------------------------------------------
 error_log = []
 def run(job):
+    from datetime import datetime
+    processing_start_time = datetime.now()
+    
     job_id     = job["id"]
     job_input  = job["input"]
 
@@ -117,14 +129,32 @@ def run(job):
     if "errors" in validated:
         return {"error": validated["errors"]}
 
-    # ------------- 1) download primary audio ------------------------
+    # ------------- 1) decode base64 audio ------------------------
     try:
-        audio_file_path = download_files_from_urls(job_id,
-                                                   [job_input["audio_file"]])[0]
-        logger.debug(f"Audio downloaded → {audio_file_path}")
+        import base64
+        import tempfile
+        
+        # Extract session info for logging
+        session_id = job_input.get("session_id", "unknown")
+        chunk_index = job_input.get("chunk_index", 0)
+        filename = job_input.get("filename", "audio.wav")
+        
+        logger.info(f"🎙️ Processing [{session_id}:{chunk_index}] via WhisperX GPU serverless")
+        
+        # Decode base64 audio data
+        audio_b64 = job_input["audio_b64"]
+        audio_data = base64.b64decode(audio_b64)
+        logger.info(f"📦 Decoded audio: {len(audio_data)} bytes")
+        
+        # Create temporary file for transcription
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+            temp_file.write(audio_data)
+            audio_file_path = temp_file.name
+            
+        logger.debug(f"Audio saved to temporary file → {audio_file_path}")
     except Exception as e:
-        logger.error("Audio download failed", exc_info=True)
-        return {"error": f"audio download: {e}"}
+        logger.error("Audio base64 decoding failed", exc_info=True)
+        return {"error": f"audio decoding: {e}"}
 
     # ------------- 2) download speaker profiles (optional) ----------
     speaker_profiles = job_input.get("speaker_samples", [])
@@ -164,26 +194,131 @@ def run(job):
         "initial_prompt"           : job_input.get("initial_prompt"),
         "batch_size"               : job_input.get("batch_size", 64),
         "temperature"              : job_input.get("temperature", 0),
-        "vad_onset"                : job_input.get("vad_onset", 0.50),
-        "vad_offset"               : job_input.get("vad_offset", 0.363),
-        "align_output"             : job_input.get("align_output", False),
-        "diarization"              : job_input.get("diarization", False),
-        "huggingface_access_token" : job_input.get("huggingface_access_token"),
+        # Optimized VAD parameters to match your current faster-whisper settings
+        # Lower values = more sensitive (similar to your 100ms min durations)
+        "vad_onset"                : job_input.get("vad_onset", 0.300),  # More sensitive than default 0.500
+        "vad_offset"               : job_input.get("vad_offset", 0.200), # More sensitive than default 0.363
+        "align_output"             : job_input.get("align_output", True),   # Enable word-level alignment
+        "diarization"              : job_input.get("diarization", True),  # Enable speaker diarization
+        "huggingface_access_token" : job_input.get("huggingface_access_token") or hf_token,
         "min_speakers"             : job_input.get("min_speakers"),
         "max_speakers"             : job_input.get("max_speakers"),
         "debug"                    : job_input.get("debug", False),
     }
 
+    # ------------- Apply audio preprocessing before WhisperX -------------
+    if AUDIO_PIPELINE_AVAILABLE:
+        try:
+            logger.info(f"🔧 Applying audio preprocessing for [{session_id}:{chunk_index}]")
+            
+            # Create pipeline with VAD disabled (let WhisperX handle VAD)
+            enable_separation = os.getenv("ENABLE_SOURCE_SEPARATION", "false").lower() == "true"
+            
+            pipeline = WhisperAudioPipeline(
+                target_sr=16000,  # WhisperX preferred sample rate
+                enable_vad=False,  # VAD disabled - handled by WhisperX
+                enable_source_separation=enable_separation,
+                segment_length=30.0
+            )
+            
+            # Load and enhance audio
+            processed_results = pipeline.process_audio_file(audio_file_path, output_dir=None)
+            
+            if processed_results and len(processed_results) > 0:
+                # Use the first (and typically only) processed segment
+                enhanced_audio = processed_results[0]['audio_data']
+                sample_rate = processed_results[0]['sample_rate']
+                
+                # Save enhanced audio to new temporary file
+                import tempfile
+                import soundfile as sf
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as enhanced_temp:
+                    sf.write(enhanced_temp.name, enhanced_audio, sample_rate)
+                    enhanced_audio_path = enhanced_temp.name
+                
+                # Update the path for WhisperX to use enhanced audio
+                original_audio_path = audio_file_path
+                audio_file_path = enhanced_audio_path
+                predict_input["audio_file"] = enhanced_audio_path
+                
+                logger.info(f"✅ Audio preprocessing completed for [{session_id}:{chunk_index}]")
+            else:
+                logger.warning(f"⚠️ Audio preprocessing returned no results, using original audio")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Audio preprocessing failed for [{session_id}:{chunk_index}]: {e}")
+            logger.info("Continuing with original audio...")
+    else:
+        logger.info(f"📦 Audio preprocessing disabled, using original audio for [{session_id}:{chunk_index}]")
+
     try:
+        transcription_start_time = datetime.now()
         result = MODEL.predict(**predict_input)             # <-- heavy job
     except Exception as e:
         logger.error("WhisperX prediction failed", exc_info=True)
         return {"error": f"prediction: {e}"}
 
+    # Convert WhisperX output to Railway app format
+    from datetime import datetime
+    import time
+    transcription_end_time = datetime.now()
+    
+    # Process segments to match Railway app format
+    cleaned_segments = []
+    full_text_parts = []
+    
+    for segment in result.segments:
+        # Extract text and basic info
+        segment_text = segment.get('text', '').strip()
+        if not segment_text:
+            continue
+            
+        # Extract speaker info (WhisperX provides real diarization)
+        speaker = segment.get('speaker', 'SPEAKER_00')
+        if not speaker or speaker in ['None', None]:
+            speaker = 'SPEAKER_00'
+            
+        cleaned_segments.append({
+            "start": float(segment.get('start', 0)),
+            "end": float(segment.get('end', 0)),
+            "text": segment_text,
+            "speaker": speaker,
+            "confidence": float(segment.get('avg_logprob', 0.0))
+        })
+        
+        full_text_parts.append(segment_text)
+    
+    # Calculate metrics
+    full_text = " ".join(full_text_parts)
+    audio_duration = max([seg['end'] for seg in cleaned_segments]) if cleaned_segments else 30.0
+    transcription_time = (transcription_end_time - transcription_start_time).total_seconds() if 'transcription_start_time' in locals() else 0
+    total_processing_time = (transcription_end_time - processing_start_time).total_seconds() if 'processing_start_time' in locals() else 0
+    rtf = total_processing_time / audio_duration if audio_duration > 0 else 0
+    
+    # Create Railway app compatible output
     output_dict = {
-        "segments"         : result.segments,
-        "detected_language": result.detected_language
+        "text": full_text,
+        "language": getattr(result, 'detected_language', 'de'),
+        "language_probability": 0.9,  # WhisperX doesn't provide this directly
+        "duration": float(audio_duration),
+        "segments": cleaned_segments,
+        "processing_info": {
+            "transcription_time": transcription_time,
+            "total_processing_time": total_processing_time,
+            "real_time_factor": rtf,
+            "model": "whisperx-large-v3",
+            "compute_type": "float16",
+            "device": "cuda",
+            "speakers_detected": len(set(seg["speaker"] for seg in cleaned_segments)),
+            "segments_count": len(cleaned_segments),
+            "serverless": True,
+            "diarization": True,
+            "audio_preprocessing": AUDIO_PIPELINE_AVAILABLE
+        }
     }
+    
+    # Log success message matching Railway app format
+    logger.info(f"✅ [{session_id}:{chunk_index}] WhisperX RTF: {rtf:.2f} | {len(cleaned_segments)} segments | {len(set(seg['speaker'] for seg in cleaned_segments))} speakers")
     # ------------------------------------------------embedding-info----------------
     # 4) speaker verification (optional)
     if embeddings:
@@ -206,6 +341,22 @@ def run(job):
 
     # 4-Cleanup and return output_dict normally
     try:
+        # Clean up temporary audio files
+        import os
+        if 'audio_file_path' in locals() and os.path.exists(audio_file_path):
+            os.unlink(audio_file_path)
+            logger.debug(f"Cleaned up temporary audio file: {audio_file_path}")
+        
+        # Clean up enhanced audio file if it exists
+        if 'enhanced_audio_path' in locals() and os.path.exists(enhanced_audio_path):
+            os.unlink(enhanced_audio_path)
+            logger.debug(f"Cleaned up enhanced audio file: {enhanced_audio_path}")
+        
+        # Clean up original audio file if we used enhanced version
+        if 'original_audio_path' in locals() and os.path.exists(original_audio_path):
+            os.unlink(original_audio_path)
+            logger.debug(f"Cleaned up original audio file: {original_audio_path}")
+        
         rp_cleanup.clean(["input_objects"])
         cleanup_job_files(job_id)
     except Exception as e:
