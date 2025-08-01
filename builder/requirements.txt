@@ -19,12 +19,8 @@ soundfile>=0.12.0                     # Audio file I/O for preprocessing pipelin
 huggingface-hub==0.29.3
 runpod==1.7.13
 cog
-speechbrain==0.5.16
 cryptography<43.0.0
 python-dotenv
-silero-vad>=4.0.0                     # VAD for audio preprocessing (optional)
-demucs>=4.0.0                         # Source separation (optional)
 # ---------- runpod / cog ----------
 # Latest runpod (s2.x) supports Python 3.10 / 3.11
-runpod
 # "cog" is **only** needed in local dev; drop it in container

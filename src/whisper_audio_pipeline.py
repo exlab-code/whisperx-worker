@@ -14,24 +14,9 @@ from typing import Tuple, List, Optional, Dict, Any
 import tempfile
 import os
 
-# VAD imports
-try:
-    import torch
-    import torchaudio
-    from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
-    SILERO_VAD_AVAILABLE = True
-except ImportError:
-    SILERO_VAD_AVAILABLE = False
-    print("Silero VAD not available - VAD features disabled")
-
-# Source separation imports
-try:
-    from demucs import pretrained
-    from demucs.apply import apply_model
-    DEMUCS_AVAILABLE = True
-except ImportError:
-    DEMUCS_AVAILABLE = False
-    print("Demucs not available - source separation disabled")
+# Legacy VAD/source separation removed - WhisperX handles VAD and diarization
+SILERO_VAD_AVAILABLE = False
+DEMUCS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -65,24 +50,10 @@ class WhisperAudioPipeline:
         self._init_models()
     
     def _init_models(self):
-        """Initialize audio processing models"""
-        # Initialize VAD model
-        if self.enable_vad:
-            try:
-                self.vad_model = load_silero_vad()
-                logger.info("Silero VAD model loaded successfully")
-            except Exception as e:
-                logger.warning(f"Failed to load VAD model: {e}")
-                self.enable_vad = False
-        
-        # Initialize Demucs model
-        if self.enable_source_separation:
-            try:
-                self.demucs_model = pretrained.get_model("htdemucs")
-                logger.info("Demucs model loaded successfully")
-            except Exception as e:
-                logger.warning(f"Failed to load Demucs model: {e}")
-                self.enable_source_separation = False
+        """Initialize audio processing models - VAD and source separation disabled"""
+        # Legacy VAD and source separation models removed
+        # WhisperX handles VAD and diarization internally
+        logger.info("Audio pipeline initialized - using basic preprocessing only")
     
     def basic_audio_cleanup(self, audio: np.ndarray, sr: int) -> Tuple[np.ndarray, int]:
         """
@@ -118,97 +89,31 @@ class WhisperAudioPipeline:
     
     def detect_voice_activity(self, audio: np.ndarray, sr: int) -> List[Dict[str, float]]:
         """
-        Detect voice activity using Silero VAD
+        VAD disabled - WhisperX handles voice activity detection
         
         Args:
             audio: Input audio array
             sr: Sample rate
             
         Returns:
-            List of speech segments with start/end times
+            List with full audio as one segment
         """
-        if not self.enable_vad or self.vad_model is None:
-            # Return full audio as one segment if VAD disabled
-            return [{"start": 0.0, "end": len(audio) / sr}]
-        
-        try:
-            # Convert to torch tensor
-            audio_tensor = torch.from_numpy(audio).float()
-            
-            # Get speech timestamps
-            speech_timestamps = get_speech_timestamps(
-                audio_tensor, 
-                self.vad_model,
-                sampling_rate=sr,
-                threshold=0.5,
-                min_speech_duration_ms=250,
-                min_silence_duration_ms=100
-            )
-            
-            # Convert to seconds
-            segments = []
-            for segment in speech_timestamps:
-                segments.append({
-                    "start": segment["start"] / sr,
-                    "end": segment["end"] / sr
-                })
-            
-            return segments if segments else [{"start": 0.0, "end": len(audio) / sr}]
-            
-        except Exception as e:
-            logger.warning(f"VAD detection failed: {e}")
-            return [{"start": 0.0, "end": len(audio) / sr}]
+        # Return full audio as one segment - WhisperX will handle VAD
+        return [{"start": 0.0, "end": len(audio) / sr}]
     
     def extract_voice_with_demucs(self, audio: np.ndarray, sr: int) -> np.ndarray:
         """
-        Extract voice from mixed audio using Demucs source separation
+        Source separation disabled - return original audio
         
         Args:
             audio: Input audio array
             sr: Sample rate
             
         Returns:
-            Voice-separated audio array
+            Original audio array (no separation)
         """
-        if not self.enable_source_separation or self.demucs_model is None:
-            return audio
-        
-        try:
-            # Convert mono to stereo for Demucs (duplicate channel)
-            if audio.ndim == 1:
-                audio_stereo = np.stack([audio, audio], axis=0)  # (2, samples)
-            else:
-                audio_stereo = audio
-            
-            # Convert to torch tensor and add batch dimension
-            audio_tensor = torch.from_numpy(audio_stereo).float()
-            if audio_tensor.dim() == 2:
-                audio_tensor = audio_tensor.unsqueeze(0)  # (1, 2, samples)
-            
-            logger.info(f"Demucs input shape: {audio_tensor.shape}")
-            
-            # Apply Demucs model
-            with torch.no_grad():
-                sources = apply_model(self.demucs_model, audio_tensor)
-            
-            logger.info(f"Demucs output shape: {sources.shape}")
-            
-            # Extract vocals (typically index 3 for htdemucs)
-            # htdemucs outputs: [drums, bass, other, vocals]
-            vocals_stereo = sources[0, 3].numpy()  # Get vocals track (2, samples)
-            
-            # Convert back to mono (average channels)
-            if vocals_stereo.ndim == 2:
-                vocals = np.mean(vocals_stereo, axis=0)
-            else:
-                vocals = vocals_stereo
-            
-            logger.info("Voice extraction with Demucs completed successfully")
-            return vocals
-            
-        except Exception as e:
-            logger.warning(f"Source separation failed: {e}")
-            return audio
+        # Source separation disabled - WhisperX provides better transcription without it
+        return audio
     
     def intelligent_segmentation(self, audio: np.ndarray, sr: int, 
                                speech_segments: List[Dict[str, float]]) -> List[Dict[str, Any]]:
