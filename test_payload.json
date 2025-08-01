@@ -6,7 +6,7 @@
     "filename": "test-audio.wav",
     "diarization": true,
     "align_output": true,
-    "huggingface_access_token": "YOUR_HF_TOKEN_HERE",
+    "huggingface_access_token": null,
     "vad_onset": 0.300,
     "vad_offset": 0.200,
     "debug": true

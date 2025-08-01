@@ -36,6 +36,13 @@ def run(job):
     
     print(f"🎙️ Processing [{session_id}:{chunk_index}] via WhisperX GPU serverless")
     
+    # Check HuggingFace token availability
+    hf_token = job_input.get('huggingface_access_token') or os.environ.get('RUNPOD_SECRET_hf_token')
+    if hf_token:
+        print(f"🔑 HuggingFace token available: {'from input' if job_input.get('huggingface_access_token') else 'from RunPod secret'}")
+    else:
+        print("⚠️ No HuggingFace token available - diarization will be disabled")
+    
     # Input validation
     validated_input = validate(job_input, INPUT_VALIDATIONS)
     if 'errors' in validated_input:
@@ -69,8 +76,8 @@ def run(job):
         'vad_onset': job_input.get('vad_onset', 0.300),  # More sensitive
         'vad_offset': job_input.get('vad_offset', 0.200),  # More sensitive
         'align_output': job_input.get('align_output', True),  # Enable word-level alignment
-        'diarization': job_input.get('diarization', False),  # Disable diarization by default until HF token is fixed
-        'huggingface_access_token': job_input.get('huggingface_access_token'),
+        'diarization': job_input.get('diarization', False),  # Enable diarization if HF token is available
+        'huggingface_access_token': job_input.get('huggingface_access_token') or os.environ.get('RUNPOD_SECRET_hf_token'),
         'min_speakers': job_input.get('min_speakers'),
         'max_speakers': job_input.get('max_speakers'),
         'debug': job_input.get('debug', False)

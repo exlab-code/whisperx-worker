@@ -29,10 +29,18 @@ A serverless worker that provides high-quality speech transcription with timesta
 | `vad_offset` | float | No | `0.363` | Voice Activity Detection offset threshold |
 | `align_output` | bool | No | `false` | Whether to align Whisper output for accurate word-level timestamps |
 | `diarization` | bool | No | `false` | Whether to assign speaker ID labels to segments |
-| `huggingface_access_token` | string | No* | `null` | HuggingFace token for diarization model access (*Required if diarization is enabled) |
+| `huggingface_access_token` | string | No* | `null` | HuggingFace token for diarization model access (*If not provided, will use `RUNPOD_SECRET_hf_token` environment variable) |
 | `min_speakers` | int | No | `null` | Minimum number of speakers (only applicable if diarization is enabled) |
 | `max_speakers` | int | No | `null` | Maximum number of speakers (only applicable if diarization is enabled) |
 | `debug` | bool | No | `false` | Whether to print compute/inference times and memory usage information |
+
+## RunPod Secrets Configuration
+
+To enable speaker diarization without hardcoding tokens, configure the HuggingFace token as a RunPod secret:
+
+1. In your RunPod template/endpoint settings, add a secret named `hf_token` with your HuggingFace token value
+2. The worker will automatically use `RUNPOD_SECRET_hf_token` environment variable if no token is provided in the input
+3. Set `diarization: true` in your input payload to enable speaker diarization
 
 ## Usage Examples
 
@@ -70,13 +78,14 @@ A serverless worker that provides high-quality speech transcription with timesta
     "temperature": 0.2,
     "align_output": true,
     "diarization": true,
-    "huggingface_access_token": "YOUR_HUGGINGFACE_TOKEN",
     "min_speakers": 2,
     "max_speakers": 5,
     "debug": true
   }
 }
 ```
+
+*Note: `huggingface_access_token` is omitted - the worker will automatically use the RunPod secret `RUNPOD_SECRET_hf_token`*
 
 ## Output Format
 
