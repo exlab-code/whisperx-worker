@@ -69,7 +69,7 @@ def run(job):
         'vad_onset': job_input.get('vad_onset', 0.300),  # More sensitive
         'vad_offset': job_input.get('vad_offset', 0.200),  # More sensitive
         'align_output': job_input.get('align_output', True),  # Enable word-level alignment
-        'diarization': job_input.get('diarization', True),  # Enable speaker diarization
+        'diarization': job_input.get('diarization', False),  # Disable diarization by default until HF token is fixed
         'huggingface_access_token': job_input.get('huggingface_access_token'),
         'min_speakers': job_input.get('min_speakers'),
         'max_speakers': job_input.get('max_speakers'),
