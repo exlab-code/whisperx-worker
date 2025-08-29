@@ -7,9 +7,12 @@ A serverless worker that provides high-quality speech transcription with timesta
 ## Features
 
 - Automatic speech transcription with WhisperX
+- Base64 audio input support for direct data transmission
 - Automatic language detection
 - Word-level timestamp alignment
-- Speaker diarization (optional)
+- Speaker diarization with configurable speaker limits
+- Speaker verification with custom voice samples
+- Session-based processing with chunk support for batch operations
 - Highly parallelized batch processing
 - Voice activity detection with configurable parameters
 - RunPod serverless compatibility
@@ -18,7 +21,10 @@ A serverless worker that provides high-quality speech transcription with timesta
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `audio_file` | string | Yes | N/A | URL to the audio file for transcription |
+| `audio_b64` | string | Yes | N/A | Base64 encoded audio data for transcription |
+| `session_id` | string | No | `unknown` | Session identifier for tracking requests |
+| `chunk_index` | int | No | `0` | Index of audio chunk for batch processing |
+| `filename` | string | No | `audio.wav` | Original filename for reference |
 | `language` | string | No | `null` | ISO code of the language spoken in the audio (e.g., 'en', 'fr'). If not specified, automatic detection will be performed |
 | `language_detection_min_prob` | float | No | `0` | Minimum probability threshold for language detection |
 | `language_detection_max_tries` | int | No | `5` | Maximum number of attempts for language detection |
@@ -33,7 +39,8 @@ A serverless worker that provides high-quality speech transcription with timesta
 | `min_speakers` | int | No | `null` | Minimum number of speakers (only applicable if diarization is enabled) |
 | `max_speakers` | int | No | `null` | Maximum number of speakers (only applicable if diarization is enabled) |
 | `debug` | bool | No | `false` | Whether to print compute/inference times and memory usage information |
-| `speaker_samples` | list | No | `[]` | List of speaker sample objects for speaker diarization |
+| `speaker_verification` | bool | No | `false` | Whether to enable speaker verification with provided samples |
+| `speaker_samples` | list | No | `[]` | List of speaker sample objects for speaker verification |
 
 ## Usage Examples
 
@@ -42,7 +49,8 @@ A serverless worker that provides high-quality speech transcription with timesta
 ```json
 {
   "input": {
-    "audio_file": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav"
+    "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
+    "filename": "sample.wav"
   }
 }
 ```
@@ -52,7 +60,9 @@ A serverless worker that provides high-quality speech transcription with timesta
 ```json
 {
   "input": {
-    "audio_file": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
+    "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
+    "filename": "gettysburg.wav",
+    "session_id": "session_123",
     "align_output": true,
     "batch_size": 32,
     "debug": true
@@ -65,7 +75,9 @@ A serverless worker that provides high-quality speech transcription with timesta
 ```json
 {
   "input": {
-    "audio_file": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
+    "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
+    "filename": "gettysburg.wav",
+    "session_id": "session_456",
     "language": "en",
     "batch_size": 32,
     "temperature": 0.2,
@@ -78,10 +90,16 @@ A serverless worker that provides high-quality speech transcription with timesta
   }
 }
 ```
-### Full Configuration with Speaker Verification. There is no limit to the number of voice you can upload,  but precision maybe be reduced over a certain threshold
+### Full Configuration with Speaker Verification
+
+There is no limit to the number of speaker samples you can provide, but precision may be reduced beyond a certain threshold.
+
 ```json
+{
   "input": {
-    "audio_file": "https://example.com/audio/sample.mp3",
+    "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
+    "filename": "sample.wav",
+    "session_id": "session_789",
     "language": "en",
     "batch_size": 32,
     "temperature": 0.2,
@@ -95,20 +113,20 @@ A serverless worker that provides high-quality speech transcription with timesta
     "speaker_samples": [
       {
         "name": "Speaker1",
-        "url": "https://example.com/speaker1.wav"
+        "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="
       },
       {
-        "name": "Speaker2",
-        "url": "https://example.com/speaker2.wav"
+        "name": "Speaker2", 
+        "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="
       },
       {
         "name": "Speaker3",
-        "url": "https://example.com/speaker3.wav"
+        "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="
       }
-      ...
     ]
   }
 }
+```
 ## Output Format
 
 The service returns a JSON object structured as follows:
