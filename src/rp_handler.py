@@ -188,10 +188,10 @@ def run(job):
         "initial_prompt"           : job_input.get("initial_prompt"),
         "batch_size"               : job_input.get("batch_size", 64),
         "temperature"              : job_input.get("temperature", 0),
-        # Optimized VAD parameters to match your current faster-whisper settings
-        # Lower values = more sensitive (similar to your 100ms min durations)
-        "vad_onset"                : job_input.get("vad_onset", 0.300),  # More sensitive than default 0.500
-        "vad_offset"               : job_input.get("vad_offset", 0.200), # More sensitive than default 0.363
+        # Conservative VAD parameters to prevent cutting off speech beginnings/endings
+        # Higher values = less aggressive VAD = more speech preserved
+        "vad_onset"                : job_input.get("vad_onset", 0.520),   # Less aggressive than default 0.500
+        "vad_offset"               : job_input.get("vad_offset", 0.320),  # Less aggressive than default 0.363
         "align_output"             : job_input.get("align_output", True),   # Enable word-level alignment
         "diarization"              : job_input.get("diarization", True),  # Enable speaker diarization
         "huggingface_access_token" : job_input.get("huggingface_access_token") or hf_token,
@@ -205,7 +205,21 @@ def run(job):
 
     try:
         transcription_start_time = datetime.now()
+        logger.debug(f"Starting transcription with VAD onset={predict_input['vad_onset']}, offset={predict_input['vad_offset']}")
         result = MODEL.predict(**predict_input)             # <-- heavy job
+        
+        # Log transcription results for debugging
+        if hasattr(result, 'segments') and result.segments:
+            first_seg = result.segments[0] if result.segments else None
+            last_seg = result.segments[-1] if result.segments else None
+            logger.debug(f"Transcription produced {len(result.segments)} segments")
+            if first_seg:
+                logger.debug(f"First segment: {first_seg.get('start', 0):.3f}s - {first_seg.get('end', 0):.3f}s")
+            if last_seg and first_seg != last_seg:
+                logger.debug(f"Last segment: {last_seg.get('start', 0):.3f}s - {last_seg.get('end', 0):.3f}s")
+        else:
+            logger.warning("No segments produced by transcription")
+            
     except Exception as e:
         logger.error("WhisperX prediction failed", exc_info=True)
         return {"error": f"prediction: {e}"}
@@ -240,9 +254,24 @@ def run(job):
         
         full_text_parts.append(segment_text)
     
-    # Calculate metrics
+    # Calculate metrics - get actual audio duration from file
     full_text = " ".join(full_text_parts)
-    audio_duration = max([seg['end'] for seg in cleaned_segments]) if cleaned_segments else 30.0
+    try:
+        # Get actual audio duration from the temporary file
+        import librosa
+        actual_audio, sr = librosa.load(audio_file_path, sr=None)
+        audio_duration = len(actual_audio) / sr
+        logger.debug(f"Actual audio duration: {audio_duration:.3f}s from file analysis")
+    except Exception as e:
+        # Fallback to segment-based calculation if file analysis fails
+        audio_duration = max([seg['end'] for seg in cleaned_segments]) if cleaned_segments else 30.0
+        logger.warning(f"Failed to get actual audio duration, using segments: {audio_duration:.3f}s - {e}")
+        
+    # Validate segment timestamps against actual duration
+    if cleaned_segments and audio_duration > 0:
+        max_segment_time = max([seg['end'] for seg in cleaned_segments])
+        if max_segment_time > audio_duration * 1.1:  # 10% tolerance
+            logger.warning(f"Segment timestamps ({max_segment_time:.3f}s) exceed audio duration ({audio_duration:.3f}s) - possible VAD issue")
     transcription_time = (transcription_end_time - transcription_start_time).total_seconds() if 'transcription_start_time' in locals() else 0
     total_processing_time = (transcription_end_time - processing_start_time).total_seconds() if 'processing_start_time' in locals() else 0
     rtf = total_processing_time / audio_duration if audio_duration > 0 else 0
