@@ -123,32 +123,23 @@ def run(job):
     if "errors" in validated:
         return {"error": validated["errors"]}
 
-    # ------------- 1) decode base64 audio ------------------------
+    # ------------- 1) download audio file from URL ------------------------
     try:
-        import base64
-        import tempfile
+        from audio_downloader import download_audio_file, cleanup_temp_file
         
-        # Extract session info for logging
-        session_id = job_input.get("session_id", "unknown")
-        chunk_index = job_input.get("chunk_index", 0)
-        filename = job_input.get("filename", "audio.wav")
+        logger.info(f"🎙️ Processing audio file via WhisperX GPU serverless")
         
-        logger.info(f"🎙️ Processing [{session_id}:{chunk_index}] via WhisperX GPU serverless")
+        # Download audio file from URL
+        audio_url = job_input["audio_url"]
+        audio_file_path, download_info = download_audio_file(audio_url)
         
-        # Decode base64 audio data
-        audio_b64 = job_input["audio_b64"]
-        audio_data = base64.b64decode(audio_b64)
-        logger.info(f"📦 Decoded audio: {len(audio_data)} bytes")
-        
-        # Create temporary file for transcription
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-            temp_file.write(audio_data)
-            audio_file_path = temp_file.name
-            
+        logger.info(f"📥 Downloaded audio: {download_info['bytes_downloaded']:,} bytes")
+        logger.debug(f"File type: {download_info['file_extension']}, Content-Type: {download_info['content_type']}")
         logger.debug(f"Audio saved to temporary file → {audio_file_path}")
+        
     except Exception as e:
-        logger.error("Audio base64 decoding failed", exc_info=True)
-        return {"error": f"audio decoding: {e}"}
+        logger.error("Audio download failed", exc_info=True)
+        return {"error": f"audio download: {e}"}
 
     # ------------- 2) download speaker profiles (optional) ----------
     speaker_profiles = job_input.get("speaker_samples", [])
@@ -202,15 +193,14 @@ def run(job):
         "debug"                    : job_input.get("debug", False),
     }
 
-    # ------------- Audio preprocessing temporarily disabled for debugging -------------
-    logger.info(f"🔧 Audio preprocessing disabled for debugging - using original audio for [{session_id}:{chunk_index}]")
+    # ------------- Process audio with chosen pipeline -------------
 
     try:
         transcription_start_time = datetime.now()
         
         if use_decoupled:
             # Use new decoupled pipeline (noScribe approach)
-            logger.info(f"🔄 Using decoupled diarization pipeline for [{session_id}:{chunk_index}]")
+            logger.info(f"🔄 Using decoupled diarization pipeline")
             from decoupled_pipeline import run_decoupled_diarization
             
             result = run_decoupled_diarization(
@@ -234,7 +224,7 @@ def run(job):
             
         else:
             # Use original coupled WhisperX pipeline
-            logger.info(f"🔄 Using coupled WhisperX pipeline for [{session_id}:{chunk_index}]")
+            logger.info(f"🔄 Using coupled WhisperX pipeline")
             logger.debug(f"Starting transcription with VAD onset={predict_input['vad_onset']}, offset={predict_input['vad_offset']}")
             
             result = MODEL.predict(**predict_input)             # <-- heavy job
@@ -348,8 +338,8 @@ def run(job):
         "processing_info": base_processing_info
     }
     
-    # Log success message matching Railway app format
-    logger.info(f"✅ [{session_id}:{chunk_index}] WhisperX RTF: {rtf:.2f} | {len(cleaned_segments)} segments | {len(set(seg['speaker'] for seg in cleaned_segments))} speakers")
+    # Log success message
+    logger.info(f"✅ WhisperX RTF: {rtf:.2f} | {len(cleaned_segments)} segments | {len(set(seg['speaker'] for seg in cleaned_segments))} speakers")
     # ------------------------------------------------embedding-info----------------
     # 4) speaker verification (optional)
     if embeddings:
@@ -372,11 +362,9 @@ def run(job):
 
     # 4-Cleanup and return output_dict normally
     try:
-        # Clean up temporary audio file
-        import os
-        if 'audio_file_path' in locals() and os.path.exists(audio_file_path):
-            os.unlink(audio_file_path)
-            logger.debug(f"Cleaned up temporary audio file: {audio_file_path}")
+        # Clean up temporary audio file using audio downloader cleanup
+        if 'audio_file_path' in locals():
+            cleanup_temp_file(audio_file_path)
         
         rp_cleanup.clean(["input_objects"])
         cleanup_job_files(job_id)
