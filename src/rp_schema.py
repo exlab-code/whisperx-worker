@@ -97,5 +97,10 @@ INPUT_VALIDATIONS = {
         'type': list,
         'required': False,
         'default': []
+    },
+    'decoupled_diarization': {
+        'type': bool,
+        'required': False,
+        'default': True
     }
 }

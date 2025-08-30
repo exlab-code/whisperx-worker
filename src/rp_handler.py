@@ -179,7 +179,9 @@ def run(job):
         #         output_dict["warning"] = f"Enrollment skipped: {e}"
     # ----------------------------------------------------------------
 
-    # ------------- 3) call WhisperX / VAD / diarization -------------
+    # ------------- 3) Choose pipeline: coupled or decoupled -------------
+    use_decoupled = job_input.get("decoupled_diarization", True)  # Default to new approach
+    
     predict_input = {
         "audio_file"               : audio_file_path,
         "language"                 : job_input.get("language"),
@@ -205,54 +207,95 @@ def run(job):
 
     try:
         transcription_start_time = datetime.now()
-        logger.debug(f"Starting transcription with VAD onset={predict_input['vad_onset']}, offset={predict_input['vad_offset']}")
-        result = MODEL.predict(**predict_input)             # <-- heavy job
         
-        # Log transcription results for debugging
-        if hasattr(result, 'segments') and result.segments:
-            first_seg = result.segments[0] if result.segments else None
-            last_seg = result.segments[-1] if result.segments else None
-            logger.debug(f"Transcription produced {len(result.segments)} segments")
-            if first_seg:
-                logger.debug(f"First segment: {first_seg.get('start', 0):.3f}s - {first_seg.get('end', 0):.3f}s")
-            if last_seg and first_seg != last_seg:
-                logger.debug(f"Last segment: {last_seg.get('start', 0):.3f}s - {last_seg.get('end', 0):.3f}s")
+        if use_decoupled:
+            # Use new decoupled pipeline (noScribe approach)
+            logger.info(f"🔄 Using decoupled diarization pipeline for [{session_id}:{chunk_index}]")
+            from decoupled_pipeline import run_decoupled_diarization
+            
+            result = run_decoupled_diarization(
+                audio_path=audio_file_path,
+                language=predict_input.get("language"),
+                batch_size=predict_input.get("batch_size", 64),
+                temperature=predict_input.get("temperature", 0),
+                initial_prompt=predict_input.get("initial_prompt"),
+                vad_onset=predict_input.get("vad_onset", 0.520),
+                vad_offset=predict_input.get("vad_offset", 0.320),
+                huggingface_token=predict_input.get("huggingface_access_token"),
+                min_speakers=predict_input.get("min_speakers"),
+                max_speakers=predict_input.get("max_speakers"),
+                align_output=predict_input.get("align_output", True),
+                debug=predict_input.get("debug", False)
+            )
+            
+            # Result is already in the correct format for decoupled pipeline
+            segments = result["segments"]
+            detected_language = result["detected_language"]
+            
         else:
-            logger.warning("No segments produced by transcription")
+            # Use original coupled WhisperX pipeline
+            logger.info(f"🔄 Using coupled WhisperX pipeline for [{session_id}:{chunk_index}]")
+            logger.debug(f"Starting transcription with VAD onset={predict_input['vad_onset']}, offset={predict_input['vad_offset']}")
+            
+            result = MODEL.predict(**predict_input)             # <-- heavy job
+            
+            # Log transcription results for debugging
+            if hasattr(result, 'segments') and result.segments:
+                first_seg = result.segments[0] if result.segments else None
+                last_seg = result.segments[-1] if result.segments else None
+                logger.debug(f"Transcription produced {len(result.segments)} segments")
+                if first_seg:
+                    logger.debug(f"First segment: {first_seg.get('start', 0):.3f}s - {first_seg.get('end', 0):.3f}s")
+                if last_seg and first_seg != last_seg:
+                    logger.debug(f"Last segment: {last_seg.get('start', 0):.3f}s - {last_seg.get('end', 0):.3f}s")
+            else:
+                logger.warning("No segments produced by transcription")
+                
+            segments = result.segments
+            detected_language = getattr(result, 'detected_language', 'en')
             
     except Exception as e:
-        logger.error("WhisperX prediction failed", exc_info=True)
+        logger.error("Transcription pipeline failed", exc_info=True)
         return {"error": f"prediction: {e}"}
 
-    # Convert WhisperX output to Railway app format
+    # Convert output to Railway app format
     from datetime import datetime
     import time
     transcription_end_time = datetime.now()
     
-    # Process segments to match Railway app format
-    cleaned_segments = []
-    full_text_parts = []
-    
-    for segment in result.segments:
-        # Extract text and basic info
-        segment_text = segment.get('text', '').strip()
-        if not segment_text:
-            continue
-            
-        # Extract speaker info (WhisperX provides real diarization)
-        speaker = segment.get('speaker', 'SPEAKER_00')
-        if not speaker or speaker in ['None', None]:
-            speaker = 'SPEAKER_00'
-            
-        cleaned_segments.append({
-            "start": float(segment.get('start', 0)),
-            "end": float(segment.get('end', 0)),
-            "text": segment_text,
-            "speaker": speaker,
-            "confidence": float(segment.get('avg_logprob', 0.0))
-        })
+    if use_decoupled:
+        # Decoupled pipeline already returns segments in correct format
+        cleaned_segments = segments
+        full_text_parts = [seg["text"] for seg in segments if seg.get("text", "").strip()]
         
-        full_text_parts.append(segment_text)
+        # Add processing info from decoupled pipeline
+        decoupled_processing_info = result.get("processing_info", {})
+        
+    else:
+        # Process segments from coupled WhisperX pipeline
+        cleaned_segments = []
+        full_text_parts = []
+        
+        for segment in segments:
+            # Extract text and basic info
+            segment_text = segment.get('text', '').strip()
+            if not segment_text:
+                continue
+                
+            # Extract speaker info (WhisperX provides real diarization)
+            speaker = segment.get('speaker', 'SPEAKER_00')
+            if not speaker or speaker in ['None', None]:
+                speaker = 'SPEAKER_00'
+                
+            cleaned_segments.append({
+                "start": float(segment.get('start', 0)),
+                "end": float(segment.get('end', 0)),
+                "text": segment_text,
+                "speaker": speaker,
+                "confidence": float(segment.get('avg_logprob', 0.0))
+            })
+            
+            full_text_parts.append(segment_text)
     
     # Calculate metrics - get actual audio duration from file
     full_text = " ".join(full_text_parts)
@@ -277,25 +320,32 @@ def run(job):
     rtf = total_processing_time / audio_duration if audio_duration > 0 else 0
     
     # Create Railway app compatible output
+    base_processing_info = {
+        "transcription_time": transcription_time,
+        "total_processing_time": total_processing_time,
+        "real_time_factor": rtf,
+        "model": "whisperx-large-v3",
+        "compute_type": "float16",
+        "device": "cuda",
+        "speakers_detected": len(set(seg["speaker"] for seg in cleaned_segments)),
+        "segments_count": len(cleaned_segments),
+        "serverless": True,
+        "diarization": True,
+        "audio_preprocessing": AUDIO_PIPELINE_AVAILABLE,
+        "pipeline_type": "decoupled_noscribe" if use_decoupled else "coupled_whisperx"
+    }
+    
+    # Add decoupled-specific processing info if available
+    if use_decoupled and 'decoupled_processing_info' in locals():
+        base_processing_info.update(decoupled_processing_info)
+    
     output_dict = {
         "text": full_text,
-        "language": getattr(result, 'detected_language', 'de'),
+        "language": detected_language,
         "language_probability": 0.9,  # WhisperX doesn't provide this directly
         "duration": float(audio_duration),
         "segments": cleaned_segments,
-        "processing_info": {
-            "transcription_time": transcription_time,
-            "total_processing_time": total_processing_time,
-            "real_time_factor": rtf,
-            "model": "whisperx-large-v3",
-            "compute_type": "float16",
-            "device": "cuda",
-            "speakers_detected": len(set(seg["speaker"] for seg in cleaned_segments)),
-            "segments_count": len(cleaned_segments),
-            "serverless": True,
-            "diarization": True,
-            "audio_preprocessing": AUDIO_PIPELINE_AVAILABLE
-        }
+        "processing_info": base_processing_info
     }
     
     # Log success message matching Railway app format
