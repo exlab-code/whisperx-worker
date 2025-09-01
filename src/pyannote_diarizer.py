@@ -99,18 +99,11 @@ def run_diarization(
         diarization = pipeline(waveform_input, **diarization_kwargs)
         
         # Convert pyannote Annotation to whisperx-compatible format
-        segments = []
-        for segment, _, speaker in diarization.itertracks(yield_label=True):
-            segments.append({
-                'start': segment.start,
-                'end': segment.end, 
-                'speaker': speaker
-            })
-            
-        print(f"Diarization complete: found {len(set(s['speaker'] for s in segments))} speakers in {len(segments)} segments")
+        # whisperx.assign_word_speakers expects a pyannote Annotation object, not a list
+        print(f"Diarization complete: found {len(list(diarization.itertracks()))} segments")
         
-        # Return in format expected by whisperx.assign_word_speakers()
-        return segments
+        # Return the raw pyannote Annotation object - whisperx.assign_word_speakers handles it directly
+        return diarization
         
     except Exception as e:
         print(f"Error during diarization: {e}")
