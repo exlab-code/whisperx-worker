@@ -2,6 +2,7 @@ from cog import BasePredictor, Input, Path, BaseModel
 from pydub import AudioSegment
 from typing import Any
 from whisperx.audio import N_SAMPLES, log_mel_spectrogram
+from pyannote_diarizer import run_diarization
 
 import gc
 import math
@@ -282,18 +283,23 @@ def align(audio, result, debug):
 def diarize(audio, result, debug, huggingface_access_token, min_speakers, max_speakers):
     start_time = time.time_ns() / 1e6
 
-    diarize_model = whisperx.DiarizationPipeline(model_name='pyannote/speaker-diarization@2.1',
-                                                 use_auth_token=huggingface_access_token, device=device)
-    diarize_segments = diarize_model(audio, min_speakers=min_speakers, max_speakers=max_speakers)
+    # Use pyannote.audio 3.1 directly for better performance
+    diarize_segments = run_diarization(
+        audio_tensor=audio,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        auth_token=huggingface_access_token,
+        device=device
+    )
 
     result = whisperx.assign_word_speakers(diarize_segments, result)
 
     if debug:
         elapsed_time = time.time_ns() / 1e6 - start_time
-        print(f"Duration to diarize segments: {elapsed_time:.2f} ms")
+        print(f"Duration to diarize segments (pyannote 3.1): {elapsed_time:.2f} ms")
 
     gc.collect()
     torch.cuda.empty_cache()
-    del diarize_model
+    # No need to delete model - it's cached in pyannote_diarizer module
 
     return result
