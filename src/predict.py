@@ -66,11 +66,10 @@ class Predictor(BasePredictor):
             "beam_size": 5,
         }
         
-        # Configure VAD options with padding for content preservation (noScribe approach)
+        # Configure VAD options - remove speech_pad as it's not valid for load_model
         vad_options = {
             "vad_onset": 0.15,    # Default sensitive values
-            "vad_offset": 0.25,   # Will be overridden by payload
-            "speech_pad": 0.4     # 400ms padding like noScribe
+            "vad_offset": 0.25    # Will be overridden by payload
         }
         
         self.whisperx_model = whisperx.load_model(
