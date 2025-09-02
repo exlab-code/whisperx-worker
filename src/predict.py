@@ -43,6 +43,15 @@ class Predictor(BasePredictor):
         
         # CRITICAL PERFORMANCE FIX: Load WhisperX model once during setup
         print("Loading WhisperX model during setup (one-time load for massive speedup)...")
+        
+        # GPU STATUS CHECK
+        if torch.cuda.is_available():
+            print(f"✅ CUDA available: {torch.cuda.device_count()} GPU(s)")
+            print(f"✅ Current GPU: {torch.cuda.get_device_name()}")
+            print(f"✅ GPU Memory before model loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
+        else:
+            print("❌ CUDA NOT AVAILABLE - Models will run on CPU (VERY SLOW!)")
+            
         setup_start_time = time.time_ns() / 1e6
         
         # Load multilingual model with noScribe-optimized parameters
@@ -50,7 +59,7 @@ class Predictor(BasePredictor):
             "temperatures": [0],  # Default temperature
             "beam_size": 5,       # noScribe uses beam_size=5 for better quality
         }
-        vad_options = {"vad_onset": 0.500, "vad_offset": 0.363}  # Default VAD
+        # DO NOT set vad_options here - we'll apply them per-request for flexibility
         
         self.whisperx_model = whisperx.load_model(
             whisper_arch, 
@@ -58,11 +67,17 @@ class Predictor(BasePredictor):
             compute_type=compute_type,
             language=None,  # Multilingual model
             asr_options=asr_options,
-            vad_options=vad_options
+            vad_options=None  # VAD options will be set per-request
         )
         
         setup_elapsed = time.time_ns() / 1e6 - setup_start_time
         print(f"WhisperX model loaded in setup: {setup_elapsed:.2f} ms")
+        
+        # VERIFY GPU USAGE AFTER MODEL LOADING
+        if torch.cuda.is_available():
+            print(f"✅ GPU Memory after WhisperX loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
+            print(f"✅ WhisperX model device: {next(self.whisperx_model.model.parameters()).device}")
+        
         print("🚀 Subsequent requests will use cached model - expect 5-10x speedup!")
 
     def predict(
@@ -160,6 +175,11 @@ class Predictor(BasePredictor):
             # Use pre-loaded model from setup() - MASSIVE PERFORMANCE IMPROVEMENT
             model = self.whisperx_model
             print("🚀 Using cached WhisperX model (no reload needed!)")
+            
+            # VERIFY GPU USAGE DURING PREDICTION
+            if torch.cuda.is_available():
+                print(f"📊 GPU Memory before transcription: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated")
+                print(f"📊 Model device check: {next(model.model.parameters()).device}")
 
             if debug:
                 elapsed_time = time.time_ns() / 1e6 - start_time
@@ -175,6 +195,15 @@ class Predictor(BasePredictor):
 
             start_time = time.time_ns() / 1e6
 
+            # Apply VAD parameters from payload for better content detection
+            print(f"🎯 Using VAD parameters from payload: onset={vad_onset}, offset={vad_offset}")
+            
+            # Update model's VAD parameters for this request
+            if hasattr(model, 'vad_model') and model.vad_model is not None:
+                model.vad_model.onset = vad_onset
+                model.vad_model.offset = vad_offset
+                print(f"✅ Updated model VAD: onset={model.vad_model.onset}, offset={model.vad_model.offset}")
+            
             result = model.transcribe(audio, batch_size=batch_size)
             detected_language = result["language"]
 

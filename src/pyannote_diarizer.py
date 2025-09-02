@@ -39,6 +39,12 @@ def initialize_pipeline(auth_token: str, device: str = "cuda") -> None:
         pipeline.to(torch.device(device))
         print(f"Pyannote 3.1 pipeline initialized successfully on {device}")
         
+        # VERIFY GPU USAGE FOR DIARIZATION
+        if torch.cuda.is_available():
+            print(f"✅ GPU Memory after pyannote loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
+        else:
+            print("❌ CUDA NOT AVAILABLE for pyannote - will run on CPU (VERY SLOW!)")
+        
     except Exception as e:
         print(f"Error initializing pyannote pipeline: {e}")
         raise e
@@ -97,7 +103,15 @@ def run_diarization(
             diarization_kwargs["max_speakers"] = max_speakers
             
         print(f"Running diarization with constraints: min_speakers={min_speakers}, max_speakers={max_speakers}")
+        
+        # GPU MONITORING DURING DIARIZATION
+        if torch.cuda.is_available():
+            print(f"📊 GPU Memory before diarization: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated")
+            
         diarization = pipeline(waveform_input, **diarization_kwargs)
+        
+        if torch.cuda.is_available():
+            print(f"📊 GPU Memory after diarization: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated")
         
         # Convert pyannote Annotation to pandas DataFrame format expected by whisperx.assign_word_speakers
         segments = []
