@@ -26,6 +26,10 @@ class Output(BaseModel):
 
 
 class Predictor(BasePredictor):
+    def __init__(self):
+        super().__init__()
+        self.whisperx_model = None  # Initialize as None for lazy loading
+    
     def setup(self):
         # Copy VAD model files
         source_folder = './models/vad'
@@ -211,9 +215,10 @@ class Predictor(BasePredictor):
                 elapsed_time = time.time_ns() / 1e6 - start_time
                 print(f"Duration to transcribe: {elapsed_time:.2f} ms")
 
+            # Clean up GPU memory but keep model cached for reuse
             gc.collect()
             torch.cuda.empty_cache()
-            del model
+            # Don't delete model - keep it cached for subsequent requests
 
             if align_output:
                 if detected_language in whisperx.alignment.DEFAULT_ALIGN_MODELS_TORCH or detected_language in whisperx.alignment.DEFAULT_ALIGN_MODELS_HF:

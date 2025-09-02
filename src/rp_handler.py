@@ -6,8 +6,9 @@ from runpod.serverless.utils import download_files_from_urls, rp_cleanup
 from rp_schema import INPUT_VALIDATIONS
 from predict import Predictor, Output
 
+# Initialize predictor but defer model loading for health check compatibility
 MODEL = Predictor()
-MODEL.setup()
+# MODEL.setup() - Moved to lazy loading in first request
 
 def cleanup_job_files(job_id, jobs_directory='/jobs'):
     job_path = os.path.join(jobs_directory, job_id)
@@ -21,6 +22,12 @@ def cleanup_job_files(job_id, jobs_directory='/jobs'):
         print(f"Job directory not found: {job_path}")
 
 def run(job):
+    # Lazy initialization: Setup model on first request to avoid health check timeout
+    if not hasattr(MODEL, 'whisperx_model') or MODEL.whisperx_model is None:
+        print("🚀 First request - loading WhisperX model (lazy initialization)...")
+        MODEL.setup()
+        print("✅ Model loaded successfully, ready for predictions!")
+    
     job_input = job['input']
     job_id = job['id']
     # Input validation
