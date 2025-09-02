@@ -66,13 +66,20 @@ class Predictor(BasePredictor):
             "beam_size": 5,
         }
         
+        # Configure VAD options with padding for content preservation (noScribe approach)
+        vad_options = {
+            "vad_onset": 0.15,    # Default sensitive values
+            "vad_offset": 0.25,   # Will be overridden by payload
+            "speech_pad": 0.4     # 400ms padding like noScribe
+        }
+        
         self.whisperx_model = whisperx.load_model(
             whisper_arch, 
             self.device, # Use the stored device string
             compute_type=compute_type,
             language=None,
             asr_options=asr_options,
-            vad_options=None
+            vad_options=vad_options  # Include VAD padding during model loading
         )
         
         setup_elapsed = time.time_ns() / 1e6 - setup_start_time
@@ -183,18 +190,51 @@ class Predictor(BasePredictor):
 
             start_time = time.time_ns() / 1e6
 
-            print(f"🎯 Using VAD parameters from payload: onset={vad_onset}, offset={vad_offset}, speech_pad={speech_pad_seconds}s")
+            print(f"🎯 Using VAD parameters from payload: onset={vad_onset}, offset={vad_offset}")
             
-            # Create vad_options dictionary for transcribe() method with padding
-            transcribe_vad_options = {
-                "vad_onset": vad_onset,
-                "vad_offset": vad_offset,
-                "speech_pad": speech_pad_seconds  # Add padding around speech segments
-            }
-            print(f"✅ Passing VAD options to transcribe(): {transcribe_vad_options}")
+            # Apply VAD parameters directly to the model's VAD pipeline (correct API usage)
+            if hasattr(model, 'vad_model') and model.vad_model is not None:
+                model.vad_model.onset = vad_onset
+                model.vad_model.offset = vad_offset
+                print(f"✅ Updated model VAD: onset={model.vad_model.onset}, offset={model.vad_model.offset}")
+            else:
+                print("⚠️  VAD model not found - using default VAD settings")
+
+            # ========== SIMPLIFIED PIPELINE: noScribe approach ==========
+            # Single transcription call with internal VAD filtering (like noScribe)
             
-            result = model.transcribe(audio, batch_size=batch_size, language=language, vad_options=transcribe_vad_options)
+            # Convert speech_pad_seconds to milliseconds for VAD parameters
+            speech_pad_ms = int(speech_pad_seconds * 1000)
+            print(f"🔄 Using noScribe approach: single transcribe() call with vad_filter=True, speech_pad_ms={speech_pad_ms}")
+            
+            # Transcribe entire audio with VAD filtering and padding
+            result = model.transcribe(
+                audio, 
+                batch_size=batch_size, 
+                language=language,
+                vad_filter=True,
+                vad_parameters={
+                    "onset": vad_onset,
+                    "offset": vad_offset, 
+                    "speech_pad_ms": speech_pad_ms
+                }
+            )
             detected_language = result["language"]
+            print(f"✅ Transcribed with internal VAD: {len(result.get('segments', []))} segments detected")
+            
+            # Apply speaker diarization if requested
+            if diarization:
+                print("🔄 Applying speaker diarization to transcribed segments")
+                speaker_segments = get_diarization_segments(audio, debug, huggingface_access_token, min_speakers, max_speakers, self.device)
+                print(f"✅ Diarization complete: {len(speaker_segments)} speaker segments")
+                
+                # Assign speakers to transcribed segments using whisperx.assign_word_speakers
+                try:
+                    result = whisperx.assign_word_speakers(speaker_segments, result)
+                    print("✅ Speaker assignment complete")
+                except Exception as e:
+                    print(f"❌ Error during speaker assignment: {e}")
+                    # Continue without speaker assignment
 
             if debug:
                 elapsed_time = time.time_ns() / 1e6 - start_time
@@ -208,9 +248,6 @@ class Predictor(BasePredictor):
                     result = align(audio, result, debug)
                 else:
                     print(f"Cannot align output as language {detected_language} is not supported for alignment")
-
-            if diarization:
-                result = diarize(audio, result, debug, huggingface_access_token, min_speakers, max_speakers)
 
             if debug:
                 print(f"max gpu memory allocated over runtime: {torch.cuda.max_memory_reserved() / (1024 ** 3):.2f} GB")
@@ -323,7 +360,31 @@ def align(audio, result, debug):
     return result
 
 
+def get_diarization_segments(audio, debug, huggingface_access_token, min_speakers, max_speakers, device):
+    """Get raw speaker segments from diarization (noScribe approach)"""
+    start_time = time.time_ns() / 1e6
+
+    # Use pyannote.audio 3.1 directly for better performance
+    diarize_segments = run_diarization(
+        audio_tensor=audio,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        auth_token=huggingface_access_token,
+        device=device
+    )
+
+    if debug:
+        elapsed_time = time.time_ns() / 1e6 - start_time
+        print(f"Duration to get diarization segments (pyannote 3.1): {elapsed_time:.2f} ms")
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    # No need to delete model - it's cached in pyannote_diarizer module
+
+    return diarize_segments  # Return raw DataFrame with speaker segments
+
 def diarize(audio, result, debug, huggingface_access_token, min_speakers, max_speakers):
+    """Legacy diarization function for non-diarization-first pipeline"""
     start_time = time.time_ns() / 1e6
 
     # Use pyannote.audio 3.1 directly for better performance
