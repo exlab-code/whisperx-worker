@@ -80,7 +80,8 @@ class Predictor(BasePredictor):
         # VERIFY GPU USAGE AFTER MODEL LOADING
         if torch.cuda.is_available():
             print(f"✅ GPU Memory after WhisperX loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
-            print(f"✅ WhisperX model device: {next(self.whisperx_model.model.parameters()).device}")
+            # WhisperModel doesn't have parameters() method, check device differently
+            print(f"✅ WhisperX model device: {self.whisperx_model.model.device}")
         
         print("🚀 Subsequent requests will use cached model - expect 5-10x speedup!")
 
@@ -183,7 +184,7 @@ class Predictor(BasePredictor):
             # VERIFY GPU USAGE DURING PREDICTION
             if torch.cuda.is_available():
                 print(f"📊 GPU Memory before transcription: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated")
-                print(f"📊 Model device check: {next(model.model.parameters()).device}")
+                print(f"📊 Model device check: {model.model.device}")
 
             if debug:
                 elapsed_time = time.time_ns() / 1e6 - start_time
