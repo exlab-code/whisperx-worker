@@ -116,8 +116,11 @@ class Predictor(BasePredictor):
                 description="VAD onset",
                 default=0.500),
             vad_offset: float = Input(
-                description="VAD offset",
+                description="VAD offset", 
                 default=0.363),
+            speech_pad_seconds: float = Input(
+                description="Seconds of padding around each speech segment to prevent content cutoff",
+                default=0.4),
             align_output: bool = Input(
                 description="Aligns whisper output to get accurate word-level timestamps",
                 default=False),
@@ -180,14 +183,17 @@ class Predictor(BasePredictor):
 
             start_time = time.time_ns() / 1e6
 
-            print(f"🎯 Using VAD parameters from payload: onset={vad_onset}, offset={vad_offset}")
+            print(f"🎯 Using VAD parameters from payload: onset={vad_onset}, offset={vad_offset}, speech_pad={speech_pad_seconds}s")
             
-            if hasattr(model, 'vad_model') and model.vad_model is not None:
-                model.vad_model.onset = vad_onset
-                model.vad_model.offset = vad_offset
-                print(f"✅ Updated model VAD: onset={model.vad_model.onset}, offset={model.vad_model.offset}")
+            # Create vad_options dictionary for transcribe() method with padding
+            transcribe_vad_options = {
+                "vad_onset": vad_onset,
+                "vad_offset": vad_offset,
+                "speech_pad": speech_pad_seconds  # Add padding around speech segments
+            }
+            print(f"✅ Passing VAD options to transcribe(): {transcribe_vad_options}")
             
-            result = model.transcribe(audio, batch_size=batch_size, language=language) # Pass language here
+            result = model.transcribe(audio, batch_size=batch_size, language=language, vad_options=transcribe_vad_options)
             detected_language = result["language"]
 
             if debug:
