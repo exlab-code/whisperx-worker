@@ -6,6 +6,7 @@ Replaces whisperx's built-in diarization with state-of-the-art models
 import torch
 import gc
 import numpy as np
+import pandas as pd
 from pyannote.audio import Pipeline
 from typing import Optional, Union
 import logging
@@ -98,12 +99,23 @@ def run_diarization(
         print(f"Running diarization with constraints: min_speakers={min_speakers}, max_speakers={max_speakers}")
         diarization = pipeline(waveform_input, **diarization_kwargs)
         
-        # Convert pyannote Annotation to whisperx-compatible format
-        # whisperx.assign_word_speakers expects a pyannote Annotation object, not a list
-        print(f"Diarization complete: found {len(list(diarization.itertracks()))} segments")
+        # Convert pyannote Annotation to pandas DataFrame format expected by whisperx.assign_word_speakers
+        segments = []
+        for segment, _, speaker in diarization.itertracks(yield_label=True):
+            segments.append({
+                "start": segment.start,
+                "end": segment.end, 
+                "speaker": speaker
+            })
         
-        # Return the raw pyannote Annotation object - whisperx.assign_word_speakers handles it directly
-        return diarization
+        # Convert to DataFrame - this is what whisperx.assign_word_speakers expects
+        diarization_df = pd.DataFrame(segments)
+        
+        print(f"Diarization complete: found {len(segments)} segments from {len(set(s['speaker'] for s in segments))} speakers")
+        print(f"DataFrame format: {diarization_df.columns.tolist()}")
+        
+        # Return DataFrame format expected by whisperx.assign_word_speakers  
+        return diarization_df
         
     except Exception as e:
         print(f"Error during diarization: {e}")
