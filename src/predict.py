@@ -29,6 +29,7 @@ class Predictor(BasePredictor):
     def __init__(self):
         super().__init__()
         self.whisperx_model = None  # Initialize as None for lazy loading
+        self.device = None  # Add device attribute to store device string
     
     def setup(self):
         # Copy VAD model files
@@ -45,11 +46,13 @@ class Predictor(BasePredictor):
             if not os.path.exists(destination_file_path):
                 shutil.copy(source_file_path, destination_folder)
         
-        # CRITICAL PERFORMANCE FIX: Load WhisperX model once during setup
+        # Determine the correct device
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
         print("Loading WhisperX model during setup (one-time load for massive speedup)...")
         
         # GPU STATUS CHECK
-        if torch.cuda.is_available():
+        if self.device == "cuda":
             print(f"✅ CUDA available: {torch.cuda.device_count()} GPU(s)")
             print(f"✅ Current GPU: {torch.cuda.get_device_name()}")
             print(f"✅ GPU Memory before model loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
@@ -58,30 +61,28 @@ class Predictor(BasePredictor):
             
         setup_start_time = time.time_ns() / 1e6
         
-        # Load multilingual model with noScribe-optimized parameters
         asr_options = {
-            "temperatures": [0],  # Default temperature
-            "beam_size": 5,       # noScribe uses beam_size=5 for better quality
+            "temperatures": [0],
+            "beam_size": 5,
         }
-        # DO NOT set vad_options here - we'll apply them per-request for flexibility
         
         self.whisperx_model = whisperx.load_model(
             whisper_arch, 
-            device, 
+            self.device, # Use the stored device string
             compute_type=compute_type,
-            language=None,  # Multilingual model
+            language=None,
             asr_options=asr_options,
-            vad_options=None  # VAD options will be set per-request
+            vad_options=None
         )
         
         setup_elapsed = time.time_ns() / 1e6 - setup_start_time
         print(f"WhisperX model loaded in setup: {setup_elapsed:.2f} ms")
         
         # VERIFY GPU USAGE AFTER MODEL LOADING
-        if torch.cuda.is_available():
+        if self.device == "cuda":
             print(f"✅ GPU Memory after WhisperX loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
-            # WhisperModel doesn't have parameters() method, check device differently
-            print(f"✅ WhisperX model device: {self.whisperx_model.model.device}")
+            # --- THIS IS THE CORRECTED DEBUG LINE ---
+            print(f"✅ WhisperX model loaded on device: {self.device}")
         
         print("🚀 Subsequent requests will use cached model - expect 5-10x speedup!")
 
