@@ -1,78 +1,59 @@
 import os
 import shutil
 import runpod
-from runpod.serverless.utils.rp_validator import validate
-from runpod.serverless.utils import download_files_from_urls, rp_cleanup
-from rp_schema import INPUT_VALIDATIONS
-from predict import Predictor, Output
+from pathlib import Path
+from predict import Predictor
 
-# Initialize predictor but defer model loading for health check compatibility
+# Initialize predictor with lazy loading for health check compatibility
 MODEL = Predictor()
-# MODEL.setup() - Moved to lazy loading in first request
-
-def cleanup_job_files(job_id, jobs_directory='/jobs'):
-    job_path = os.path.join(jobs_directory, job_id)
-    if os.path.exists(job_path):
-        try:
-            shutil.rmtree(job_path)
-            print(f"Removed job directory: {job_path}")
-        except Exception as e:
-            print(f"Error removing job directory {job_path}: {str(e)}")
-    else:
-        print(f"Job directory not found: {job_path}")
 
 def run(job):
-    # Lazy initialization: Setup model on first request to avoid health check timeout
-    if not hasattr(MODEL, 'whisperx_model') or MODEL.whisperx_model is None:
-        print("🚀 First request - loading WhisperX model (lazy initialization)...")
+    """Clean noScribe-based RunPod handler"""
+    
+    # Lazy initialization: Setup models on first request to avoid health check timeout  
+    if MODEL.faster_whisper_model is None:
+        print("🚀 First request - loading models (lazy initialization)...")
         MODEL.setup()
-        print("✅ Model loaded successfully, ready for predictions!")
+        print("✅ Models loaded successfully, ready for predictions!")
     
     job_input = job['input']
     job_id = job['id']
-    # Input validation
-    validated_input = validate(job_input, INPUT_VALIDATIONS)
-    if 'errors' in validated_input:
-        return {"error": validated_input['errors']}
     
-    # Download audio file
-    audio_file_path = download_files_from_urls(job['id'], [job_input['audio_file']])[0]
-    
-    # Prepare input for prediction
-    predict_input = {
-        'audio_file': audio_file_path,
-        'language': job_input.get('language'),
-        'language_detection_min_prob': job_input.get('language_detection_min_prob', 0),
-        'language_detection_max_tries': job_input.get('language_detection_max_tries', 5),
-        'initial_prompt': job_input.get('initial_prompt'),
-        'batch_size': job_input.get('batch_size', 64),  # Keep default batch_size
-        'temperature': job_input.get('temperature', 0),
-        'vad_onset': job_input.get('vad_onset', 0.500),
-        'vad_offset': job_input.get('vad_offset', 0.363),
-        'align_output': job_input.get('align_output', False),
-        'diarization': job_input.get('diarization', False),
-        'huggingface_access_token': job_input.get('huggingface_access_token'),
-        'min_speakers': job_input.get('min_speakers'),
-        'max_speakers': job_input.get('max_speakers'),
-        'debug': job_input.get('debug', False)
-    }
-    
-    # Run prediction
     try:
-        result = MODEL.predict(**predict_input)
+        # Basic input validation
+        if 'audio' not in job_input and 'audio_base64' not in job_input:
+            return {"error": "Either 'audio' URL or 'audio_base64' is required"}
         
-        # Convert Output model to dict for JSON serialization
-        output_dict = {
+        # Download audio file if URL provided
+        if 'audio' in job_input:
+            from runpod.serverless.utils import download_files_from_urls
+            audio_file_path = download_files_from_urls(job_id, [job_input['audio']])[0]
+        else:
+            # Handle base64 audio (simplified for now)
+            return {"error": "Base64 audio not yet implemented"}
+        
+        # Map RunPod inputs to our clean predict interface
+        result = MODEL.predict(
+            audio_file=Path(audio_file_path),
+            language=job_input.get('language'),
+            num_speakers=job_input.get('num_speakers'),
+            enable_diarization=job_input.get('enable_diarization', True),
+            speech_pad_ms=job_input.get('speech_pad_ms', 400)
+        )
+        
+        # Cleanup job files
+        job_path = f"/jobs/{job_id}"
+        if os.path.exists(job_path):
+            shutil.rmtree(job_path)
+            print(f"Cleaned up job directory: {job_path}")
+        
+        return {
             "segments": result.segments,
-            "detected_language": result.detected_language
+            "language": result.language
         }
         
-        # Cleanup downloaded files
-        rp_cleanup.clean(['input_objects'])
-        cleanup_job_files(job_id)
-        
-        return output_dict
     except Exception as e:
+        print(f"❌ Error in handler: {e}")
         return {"error": str(e)}
 
 runpod.serverless.start({"handler": run})

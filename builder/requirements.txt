@@ -1,8 +1,7 @@
-# Core dependencies (minimal approach - let packages resolve their own deps)
+# Clean noScribe-based implementation - minimal dependencies
 runpod~=1.7.9
 faster-whisper==1.1.0
-pydub
-whisperx @ git+https://github.com/m-bain/whisperx.git@58f00339af7dcc9705ef49d97a1f40764b7cf555
 pyannote.audio==3.1.1
-speechbrain>=0.5.16
-huggingface-hub
+pydub
+torch
+torchaudio

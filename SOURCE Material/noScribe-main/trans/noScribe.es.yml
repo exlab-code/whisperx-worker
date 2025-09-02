@@ -1,0 +1,77 @@
+es:
+  app_header: Transcripción de audio con IA
+  welcome_message: ¡Hola! ¡noScribe está listo!
+  welcome_credits: >
+
+    Versión %{v}, Kai Dröge %{y}
+    
+    adaptado a macOS por Philipp Schneider
+    
+    impulsado por Whisper (OpenAI), faster-whisper (Guillaume Klein) y pyannote (Hervé Bredin)
+  welcome_instructions: >
+
+    Usa los botones de la izquierda para seleccionar un archivo de audio y un nombre de archivo para tu transcripción finalizada.
+    Por favor, ten paciencia. La transcripción puede llevar de 2 a 5 veces más tiempo que el archivo de audio. Prueba tus ajustes 
+    con una sección más corta antes de transcribir el audio completo. (Inicio = 00:00:00 y Fin = 00:03:00 transcribirán los primeros 3 minutos.)   
+
+
+    ¡Disfruta!
+
+  setup_message: 'Primera ejecución: Completa la configuración...'
+
+  # Elementos de la interfaz de usuario
+  label_audio_file: 'Archivo de audio:'
+  label_audio_file_name: <seleccionar archivo>
+  
+  label_transcript_file: 'Guardar transcripción como:'
+  label_transcript_file_name: <seleccionar nombre de archivo> 
+
+  label_start: 'Inicio (hh:mm:ss): '
+  label_stop: 'Fin (hh:mm:ss): ' 
+
+  label_language: 'Idioma:'
+  label_speaker: 'Detección de oradores:'
+  label_whisper_model: 'Modelo:'
+  label_add_custom_models: 'Añadir modelo AI...'
+  label_overlapping: 'Discurso solapado:'
+  label_pause: 'Marca pausas:'
+  label_timestamps: 'Timestamps:'
+  
+  start_button: Iniciar 
+  stop_button: Cancelar
+
+  # Mensajes de registro
+  log_transcript_filename: 'Nombre de archivo de transcripción: '
+  log_audio_file_selected: 'Archivo de audio seleccionado: '
+  start_audio_conversion: 'Convirtiendo audio...'
+  audio_conversion_finished: 'Conversión de audio finalizada'
+  start_identifiying_speakers: 'Identificación de oradores...'
+  loading_pyannote: 'Cargando pyannote'
+  start_canceling: 'Cancelando... (por favor, espera un momento)'
+  start_transcription: 'Transcribiendo...'
+  loading_whisper: 'Cargando whisper'
+  transcription_finished: 'Transcripción finalizada.' 
+  transcription_saved: 'Guardado en '
+  trancription_time: 'Duración: %{duration} minutos'
+
+  # Mensajes de error
+  err_setup: 'Se produjo un error durante la configuración. Verifica tu conexión a Internet y reinicia el programa.'
+  err_invalid_time_string: 'Este no es un formato de tiempo válido: "%{time}"'
+  err_options: 'Error en las opciones'
+  err_no_audio_file: 'Error: Por favor, selecciona un archivo de audio.'
+  err_no_transcript_file: 'Error: Por favor, elige un nombre de archivo para la transcripción finalizada.'
+  err_ffmpeg: 'ffmpeg devolvió un error'
+  err_converting_audio: 'Error en el paso 1: conversión de audio.'
+  err_identifying_speakers: 'Error en el paso 2: identificación de oradores.'
+  transcription_canceled: '¿Realmente deseas cancelar la transcripción?'   
+  err_user_cancelation: 'El proceso ha sido cancelado por el usuario.'
+  err_whisper_main: 'Terminación de Whisper con el código de error %{e}'
+  err_transcription: 'Error en el paso 3: transcripción'
+  rescue_saving: 'Fallo al guardar con el nombre de archivo original. Guardado en este archivo en su lugar: %{file}'
+  rescue_saving_failed: 'Error: Fallo al guardar con el nombre de archivo original. El nombre de archivo alternativo también existe. Tengo que salir. (¡Asegúrate de que tu transcripción no esté abierta en Word!)'
+
+  # Contenido del documento
+  doc_header: 'Transcrito con noScribe ver. %{version}'
+  doc_header_audio: 'Archivo de audio: %{file}'
+  pause_minutes: '(%{minutes} minuto[s] pausa)'
+  pause_seconds: '(%{seconds} segundos de pausa)'
