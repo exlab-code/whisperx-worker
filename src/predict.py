@@ -9,15 +9,18 @@ import math
 import os
 import shutil
 import whisperx
+from faster_whisper import WhisperModel
+from faster_whisper.vad import VadOptions
 import tempfile
 import time
 import torch
+import runpod
 
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
-compute_type = "float16"  # change to "int8" if low on GPU mem (may reduce accuracy)
-device = "cuda"
-whisper_arch = "./models/faster-whisper-large-v3"
+# Dynamic compute type based on device (matches official RunPod worker pattern)
+# Will be set in setup() based on actual device availability
+whisper_arch = "large-v3"
 
 
 class Output(BaseModel):
@@ -29,6 +32,7 @@ class Predictor(BasePredictor):
     def __init__(self):
         super().__init__()
         self.whisperx_model = None  # Initialize as None for lazy loading
+        self.faster_whisper_model = None  # Initialize faster-whisper model
         self.device = None  # Add device attribute to store device string
     
     def setup(self):
@@ -47,7 +51,13 @@ class Predictor(BasePredictor):
                 shutil.copy(source_file_path, destination_folder)
         
         # Determine the correct device
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Use RunPod's device detection pattern (matches official worker)
+        self.device = "cuda" if runpod.util.is_cuda_available() else "cpu"
+        
+        # Dynamic compute type based on device (matches official RunPod worker)
+        self.compute_type = "float16" if self.device == "cuda" else "int8"
+        
+        print(f"🖥️  Device: {self.device}, Compute type: {self.compute_type}")
         
         print("Loading WhisperX model during setup (one-time load for massive speedup)...")
         
@@ -72,23 +82,24 @@ class Predictor(BasePredictor):
             "vad_offset": 0.25    # Will be overridden by payload
         }
         
-        self.whisperx_model = whisperx.load_model(
-            whisper_arch, 
-            self.device, # Use the stored device string
-            compute_type=compute_type,
-            language=None,
-            asr_options=asr_options,
-            vad_options=vad_options  # Include VAD padding during model loading
+        # Use faster-whisper directly like noScribe for proven VAD support
+        self.faster_whisper_model = WhisperModel(
+            whisper_arch,
+            device=self.device,
+            compute_type=self.compute_type,
+            local_files_only=False  # Download model from HuggingFace
         )
         
+        # Note: WhisperX model will be loaded lazily only if alignment is needed
+        # This saves memory when only doing transcription + diarization
+        
         setup_elapsed = time.time_ns() / 1e6 - setup_start_time
-        print(f"WhisperX model loaded in setup: {setup_elapsed:.2f} ms")
+        print(f"faster-whisper model loaded in setup: {setup_elapsed:.2f} ms")
         
         # VERIFY GPU USAGE AFTER MODEL LOADING
         if self.device == "cuda":
-            print(f"✅ GPU Memory after WhisperX loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
-            # --- THIS IS THE CORRECTED DEBUG LINE ---
-            print(f"✅ WhisperX model loaded on device: {self.device}")
+            print(f"✅ GPU Memory after faster-whisper loading: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved")
+            print(f"✅ faster-whisper model loaded on device: {self.device}")
         
         print("🚀 Subsequent requests will use cached model - expect 5-10x speedup!")
 
@@ -161,19 +172,32 @@ class Predictor(BasePredictor):
 
             audio_duration = get_audio_duration(audio_file)
 
-            if language is None and language_detection_min_prob > 0 and audio_duration > 30000:
-                # ... (Language detection logic is unchanged) ...
-                pass # Placeholder for unchanged code
+            # Language detection if needed
+            if language is None:
+                print("🔍 Auto-detecting language...")
+                try:
+                    # Use faster-whisper for language detection like noScribe
+                    faster_model = self.faster_whisper_model
+                    language_info = faster_model.detect_language(audio_file)
+                    language = language_info[0]  # Get detected language code
+                    language_probability = language_info[1]  # Get confidence
+                    print(f"✅ Detected language: {language} (confidence: {language_probability:.3f})")
+                    
+                    # Check if confidence meets minimum threshold
+                    if language_detection_min_prob > 0 and language_probability < language_detection_min_prob:
+                        print(f"⚠️ Language detection confidence {language_probability:.3f} below threshold {language_detection_min_prob}")
+                        # Continue anyway but warn user
+                        
+                except Exception as e:
+                    print(f"❌ Language detection failed: {e}")
+                    language = "en"  # Fallback to English
+                    print(f"🔄 Falling back to English")
 
             start_time = time.time_ns() / 1e6
 
-            model = self.whisperx_model
-            print("🚀 Using cached WhisperX model (no reload needed!)")
-            
-            # VERIFY GPU USAGE DURING PREDICTION
+            # VERIFY GPU USAGE DURING PREDICTION  
             if self.device == "cuda":
                 print(f"📊 GPU Memory before transcription: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated")
-                # --- THIS IS THE CORRECTED LINE ---
                 print(f"📊 Model device check: {self.device}")
 
             if debug:
@@ -181,49 +205,66 @@ class Predictor(BasePredictor):
                 print(f"Duration to load model: {elapsed_time:.2f} ms")
 
             start_time = time.time_ns() / 1e6
-            audio = whisperx.load_audio(audio_file)
 
-            if debug:
-                elapsed_time = time.time_ns() / 1e6 - start_time
-                print(f"Duration to load audio: {elapsed_time:.2f} ms")
-
-            start_time = time.time_ns() / 1e6
-
-            print(f"🎯 Using VAD parameters from payload: onset={vad_onset}, offset={vad_offset}")
+            # ========== EXACT NOSCRIBE APPROACH: faster-whisper with VAD ==========
             
-            # Apply VAD parameters directly to the model's VAD pipeline (correct API usage)
-            if hasattr(model, 'vad_model') and model.vad_model is not None:
-                model.vad_model.onset = vad_onset
-                model.vad_model.offset = vad_offset
-                print(f"✅ Updated model VAD: onset={model.vad_model.onset}, offset={model.vad_model.offset}")
-            else:
-                print("⚠️  VAD model not found - using default VAD settings")
-
-            # ========== SIMPLIFIED PIPELINE: noScribe approach ==========
-            # Single transcription call with internal VAD filtering (like noScribe)
+            # Fix FieldInfo parameter access issue
+            pad_seconds = float(speech_pad_seconds)
+            speech_pad_ms = int(pad_seconds * 1000)
             
-            # Convert speech_pad_seconds to milliseconds for VAD parameters
-            speech_pad_ms = int(speech_pad_seconds * 1000)
-            print(f"🔄 Using noScribe approach: single transcribe() call with vad_filter=True, speech_pad_ms={speech_pad_ms}")
-            
-            # Transcribe entire audio with VAD filtering and padding
-            result = model.transcribe(
-                audio, 
-                batch_size=batch_size, 
-                language=language,
-                vad_filter=True,
-                vad_parameters={
-                    "onset": vad_onset,
-                    "offset": vad_offset, 
-                    "speech_pad_ms": speech_pad_ms
-                }
+            # Create VadOptions exactly like noScribe
+            vad_parameters = VadOptions(
+                speech_pad_ms=speech_pad_ms,  # 400ms padding like noScribe
             )
-            detected_language = result["language"]
-            print(f"✅ Transcribed with internal VAD: {len(result.get('segments', []))} segments detected")
+            
+            print(f"🔄 Using noScribe approach: faster-whisper with VadOptions(speech_pad_ms={speech_pad_ms})")
+            
+            # Use faster-whisper model directly like noScribe
+            faster_model = self.faster_whisper_model
+            
+            # Transcribe with exact noScribe parameters  
+            segments, info = faster_model.transcribe(
+                audio_file,  # Use audio file path like noScribe
+                language=language,
+                beam_size=5,  # Match noScribe's beam_size
+                word_timestamps=True,
+                vad_filter=True,
+                vad_parameters=vad_parameters
+            )
+            
+            # Convert faster-whisper segments to WhisperX-compatible format
+            segments_list = []
+            for segment in segments:
+                segment_dict = {
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text
+                }
+                # Add word-level timestamps if available
+                if hasattr(segment, 'words') and segment.words:
+                    segment_dict["words"] = [
+                        {
+                            "start": word.start,
+                            "end": word.end,
+                            "word": word.word
+                        }
+                        for word in segment.words
+                    ]
+                segments_list.append(segment_dict)
+            
+            result = {
+                "segments": segments_list,
+                "language": info.language
+            }
+            detected_language = info.language
+            print(f"✅ Transcribed with faster-whisper VAD: {len(result['segments'])} segments detected")
             
             # Apply speaker diarization if requested
             if diarization:
                 print("🔄 Applying speaker diarization to transcribed segments")
+                
+                # Load audio for diarization (needed by pyannote)
+                audio = whisperx.load_audio(audio_file)
                 speaker_segments = get_diarization_segments(audio, debug, huggingface_access_token, min_speakers, max_speakers, self.device)
                 print(f"✅ Diarization complete: {len(speaker_segments)} speaker segments")
                 
@@ -244,6 +285,24 @@ class Predictor(BasePredictor):
 
             if align_output:
                 if detected_language in whisperx.alignment.DEFAULT_ALIGN_MODELS_TORCH or detected_language in whisperx.alignment.DEFAULT_ALIGN_MODELS_HF:
+                    # Load WhisperX model lazily for alignment (memory optimization)
+                    if self.whisperx_model is None:
+                        print("🔄 Loading WhisperX model for alignment...")
+                        asr_options = {"temperatures": [0], "beam_size": 5}
+                        vad_options = {"vad_onset": 0.15, "vad_offset": 0.25}
+                        self.whisperx_model = whisperx.load_model(
+                            whisper_arch, 
+                            self.device,
+                            compute_type=self.compute_type,
+                            language=None,
+                            asr_options=asr_options,
+                            vad_options=vad_options
+                        )
+                        print("✅ WhisperX model loaded for alignment")
+                    
+                    # Load audio for alignment if not already loaded for diarization
+                    if 'audio' not in locals():
+                        audio = whisperx.load_audio(audio_file)
                     result = align(audio, result, debug)
                 else:
                     print(f"Cannot align output as language {detected_language} is not supported for alignment")
